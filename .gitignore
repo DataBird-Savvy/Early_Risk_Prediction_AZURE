@@ -133,6 +133,8 @@ celerybeat.pid
 env/
 venv/
 ENV/
+tensorkafka/
+healthenv/
 env.bak/
 venv.bak/
 

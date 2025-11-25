@@ -1,0 +1,4 @@
+,Blood Glucose Level (mg/dL),Blood Oxygen (SpO₂),Respiratory Rate (RR),Body Temperature,Hemoglobin,Glucose,Cholesterol,Heart Rate,Platelet Count,WBC Count,RBC Count,Creatinine,Urea,Sodium,Potassium,Calcium,Systolic_BP,Diastolic_BP,PulsePressure,MAP,ShockIndex,is_hypertensive,is_tachycardic,is_hypoxic,is_hyperglycemia
+247,196.06,95.4,18,36.75,12.96,203.35,247.43,64,295839,4054.2,6.01,1.39,41.86,144.61,4.83,8.62,139,87,52,104.33,0.46,1,0,0,1
+248,97.2,99.2,16,36.2,16.4,64.6,152.1,75,234654,4325.2,5.9,0.69,29.8,141.6,3.9,10.29,110,83,27,92.0,0.68,1,0,0,0
+249,166.0,99.7,16,36.8,14.0,144.7,241.4,63,195854,6611.7,6.26,1.36,35.2,144.2,5.4,10.11,120,60,60,80.0,0.52,0,0,0,1

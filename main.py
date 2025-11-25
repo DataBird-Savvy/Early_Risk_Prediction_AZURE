@@ -1,149 +1,198 @@
-import os
-import pandas as pd
-import numpy as np
-import joblib
 import streamlit as st
-from logger import logging
-from tensorflow.keras.models import load_model
-import time
-from dotenv import load_dotenv
+import pandas as pd
+import joblib
+import shap
+import numpy as np
+import warnings
+import logging
+
 from src.data_preprocessing import DataPreprocessor
+from src.config import MERGED_DATA_PATH, BEST_PIPELINE, TRAIN_COL_ORDER
 
+warnings.filterwarnings("ignore")
 
-load_dotenv()
+# --------------------------------------------------
+# Logger Setup
+# --------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+logger.info("Application started")
 
+# --------------------------------------------------
+# Streamlit Layout
+# --------------------------------------------------
+try:
+    st.set_page_config(
+        page_title="Doctor Patient Risk Dashboard",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    st.title("🩺 Doctor Monitoring Dashboard")
+    st.write("Real-time patient monitoring with Explainable AI")
+    logger.info("UI initialized")
+except Exception as e:
+    logger.error(f"Streamlit UI setup failed: {e}")
+    st.error(f"UI setup failed: {e}")
+    st.stop()
 
+# --------------------------------------------------
+# Load Pipeline
+# --------------------------------------------------
+@st.cache_resource
+def load_pipeline():
+    try:
+        logger.info(f"Loading pipeline from {BEST_PIPELINE}")
+        pipeline = joblib.load(BEST_PIPELINE)
+        logger.info("Pipeline loaded successfully")
+        return pipeline
+    except Exception as e:
+        logger.error(f"Pipeline loading failed: {e}")
+        st.error(f"❌ Could not load ML pipeline: {e}")
+        return None
 
-class PatientHealthMonitor:
-    def __init__(self):
-        """Initialize paths, load models, and preprocess data."""
-        logging.info("Initializing PatientHealthMonitor...")
+pipeline = load_pipeline()
+if pipeline is None:
+    st.stop()
 
-        self.merged_data_path = os.getenv("MERGED_DATA_PATH")
-        self.encoder_path = os.getenv("ENCODER_PATH")
-        self.scaler_path = os.getenv("SCALER_PATH")
-        self.model_path = os.getenv("MODEL_PATH")
+# --------------------------------------------------
+# Load Live Data
+# --------------------------------------------------
+@st.cache_data
+def load_live_data():
+    try:
+        logger.info(f"Loading live data from {MERGED_DATA_PATH}")
+        df = pd.read_csv(MERGED_DATA_PATH)
+        logger.info(f"Live data loaded — shape: {df.shape}")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading live data: {e}")
+        st.error(f"❌ Could not load live data: {e}")
+        return None
 
-        try:
-            preprocessor = DataPreprocessor(self.merged_data_path, self.encoder_path, self.scaler_path)
-            self.df_scaled = preprocessor.preprocess()
-            logging.info("Data preprocessing completed successfully.")
+def convert_strlist_columns(df):
+    try:
+        for col in df.columns:
+            if df[col].dtype == object and df[col].str.startswith('[').any():
+                df[col] = df[col].apply(lambda x: np.array(eval(x)) if isinstance(x, str) else x)
+    except Exception as e:
+        logger.warning(f"String list conversion warning: {e}")
+    return df
 
-            self.model = load_model(self.model_path)
-            logging.info("Model loaded successfully.")
+try:
+    df_raw = load_live_data()
+    if df_raw is None:
+        st.stop()
+except Exception as e:
+    logger.error(f"Data loading failed: {e}")
+    st.error(f"❌ Data loading failed: {e}")
+    st.stop()
 
-            self.encoder = joblib.load(self.encoder_path)
-            self.scaler = joblib.load(self.scaler_path)
-            logging.info("Encoder and Scaler loaded successfully.")
+# --------------------------------------------------
+# Preprocessing
+# --------------------------------------------------
+try:
+    pre = DataPreprocessor()
+    df_clean = pre.clean_input(df_raw)
+    logger.info(f"Cleaned data shape: {df_clean.shape}")
 
-        except Exception as e:
-            logging.error(f"Error during initialization: {str(e)}")
-            raise e  # Stop execution if model loading fails
+    df_features = pre.feature_engineering(df_clean)
+    logger.info(f"Feature-engineered shape: {df_features.shape}")
 
-        self.all_feature_names = list(self.df_scaled.columns[1:])  # Exclude 'Patient_ID'
+    latest = pre.get_latest_records(df_features)
+    logger.info(f"Latest patient records shape: {latest.shape}")
+except Exception as e:
+    logger.error(f"Preprocessing failed: {e}")
+    st.error(f"❌ Preprocessing failed: {e}")
+    st.stop()
 
-        self.critical_thresholds = {
-            "Blood Glucose Level (mg/dL)": (70, 140),
-            "Blood Oxygen (SpO₂)": (90, 100),
-            "Electrocardiogram (ECG/EKG)": (0.5, 1.5),
-            "Hydration Levels": (50, 70),
-            "Heart Rate (HR)": (50, 110),
-            "Respiratory Rate (RR)": (12, 20),
-            "Body Temperature": (36.1, 37.8),
-            "Hemoglobin": (12, 18),
-            "Glucose": (70, 140),
-            "Cholesterol": (100, 200),
-            "Platelet Count": (150000, 450000),
-            "WBC Count": (4000, 11000),
-            "RBC Count": (4.7, 6.1),
-            "Creatinine": (0.7, 1.3),
-            "Urea": (7, 20),
-            "Sodium": (135, 145),
-            "Potassium": (3.5, 5.1),
-            "Calcium": (8.5, 10.5),
-            "Systolic_BP": (90, 140),
-            "Diastolic_BP": (60, 90),
-        }
+# --------------------------------------------------
+# Prediction
+# --------------------------------------------------
+try:
+    train_feature_order = joblib.load(TRAIN_COL_ORDER)
+    latest_for_pred = latest.copy()
+    drop_cols = ["Patient_ID", "Date", "Time"]
+    latest_for_pred = latest_for_pred.drop(columns=[c for c in drop_cols if c in latest_for_pred.columns])
+    latest_for_pred = latest_for_pred.round(2)
+    latest_for_pred = latest_for_pred[train_feature_order]
 
-    def make_predictions(self):
-        """Generate predictions for each patient and detect critical alerts."""
-        logging.info("Generating predictions...")
-        predictions = {}
-        alerts = {}
+    latest_features_for_expl = latest_for_pred.copy()
+    latest_features_for_expl = convert_strlist_columns(latest_features_for_expl)
+    latest_for_pred = convert_strlist_columns(latest_for_pred)
 
-        for patient_id in self.df_scaled['Patient_ID'].unique():
-            patient_data = self.df_scaled[self.df_scaled['Patient_ID'] == patient_id].iloc[:, 1:].values  
+    pred = pipeline.predict(latest_for_pred)
+    latest["Predicted_Risk_Label"] = pred
 
-            if len(patient_data) < 30:
-                logging.warning(f"Patient {patient_id} has insufficient data (<30 readings), skipping...")
-                continue  
+    risk_map = {0: "Low", 1: "Medium", 2: "High", 3: "Critical"}
+    latest["Predicted_Risk"] = latest["Predicted_Risk_Label"].map(risk_map)
+    logger.info("Predictions completed")
 
-            last_sequence = patient_data[-30:].reshape(1, 30, -1)
-            next_row_prediction = self.model.predict(last_sequence)
+    st.subheader("📌 Latest Patient Risk Prediction")
+    st.dataframe(latest[["Patient_ID", "Predicted_Risk"]])
+except Exception as e:
+    logger.error(f"Prediction failed: {e}")
+    st.error(f"❌ Prediction failed: {e}")
+    st.stop()
 
-            if next_row_prediction.shape[1] != self.scaler.scale_.shape[0]:
-                logging.warning(f"Feature mismatch for patient {patient_id}, skipping...")
-                continue  
+# --------------------------------------------------
+# SHAP Explainability
+# --------------------------------------------------
+try:
+    st.subheader("🧠 Explainability — Why this risk?")
+    selector = pipeline.named_steps["select"]
+    model = pipeline.named_steps["model"]
 
-            next_row_original = self.scaler.inverse_transform(next_row_prediction)
-            predictions[patient_id] = np.round(next_row_original, 2)
+    patient_row = latest_features_for_expl.iloc[[0]].copy()
+    patient_array = patient_row.to_numpy().astype(float)
+    patient_array = np.round(patient_array, 2)
 
-            alert_messages = []
-            for i, feature in enumerate(self.all_feature_names):
-                if feature in self.critical_thresholds:
-                    min_val, max_val = self.critical_thresholds[feature]
-                    feature_value = predictions[patient_id][0, i]
-                    if feature_value < min_val or feature_value > max_val:
-                        alert_msg = f"⚠️ {feature} is out of range: {feature_value:.2f}"
-                        alert_messages.append(alert_msg)
-                        logging.warning(f"ALERT for Patient {patient_id}: {alert_msg}")
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(patient_array)
 
-            if alert_messages:
-                alerts[patient_id] = alert_messages
+    pred_class = pred[0]
+    shap_for_class = shap_values[pred_class] if isinstance(shap_values, list) else shap_values
 
-        return predictions, alerts
+    shap_df = pd.DataFrame({
+        "Feature": train_feature_order,
+        "SHAP_Value": shap_for_class[0]
+    }).sort_values(by="SHAP_Value", key=abs, ascending=False)
 
-    def highlight_abnormal_values(self, val, feature_name):
-        """Highlight values that are outside the normal range."""
-        if feature_name in self.critical_thresholds:
-            min_val, max_val = self.critical_thresholds[feature_name]
-            if val < min_val or val > max_val:
-                return "background-color: red; color: white;"  # Highlight in red
-        return ""
+    st.dataframe(shap_df)
+except Exception as e:
+    logger.error(f"Explainability failure: {e}")
+    st.error(f"Explainability failed: {e}")
 
-    def run_dashboard(self):
-        """Run the Streamlit dashboard."""
-        
-        logging.info("Starting Streamlit dashboard...")
-        st.set_page_config(page_title="Early Health Monitoring", layout="wide")
-        st.title("🏥 Early Health Monitoring Dashboard")
+# --------------------------------------------------
+# Human-readable explanation
+# --------------------------------------------------
+def explain_human_readable(df):
+    try:
+        text="Based on the latest vital signs and lab results, the following risk factors were identified:\n\n"
+        spo2 = df["Blood Oxygen (SpO₂)"].iloc[0]
+        shock = df["ShockIndex"].iloc[0]
+        glu = df["Blood Glucose Level (mg/dL)"].iloc[0]
+        hr = df["Heart Rate"].iloc[0]
 
-        predictions, alerts = self.make_predictions()
+        if spo2 < 94:
+            text += "- Low oxygen saturation (SpO₂ < 94%) – major risk\n"
+        if shock > 0.9:
+            text += "- High Shock Index (>0.9) – major risk\n"
+        if glu >= 140:
+            text += "- High blood glucose (>140 mg/dL)\n"
+        if hr >= 100:
+            text += "- Elevated heart rate (>100 bpm)\n"
 
-        for patient_id, pred_values in predictions.items():
-            decoded_patient_id = self.encoder.inverse_transform([int(patient_id)])[0]
+        return text
+    except Exception as e:
+        logger.error(f"Human-readable explanation failed: {e}")
+        return "❌ Could not generate human-readable explanation."
 
-            st.subheader(f"🔮 Predicted Readings for Patient {decoded_patient_id}")
-
-            pred_df = pd.DataFrame(pred_values, columns=self.all_feature_names)
-            styled_pred_df = pred_df.style.apply(lambda col: col.apply(self.highlight_abnormal_values, args=(col.name,)), axis=0)
-
-            st.dataframe(styled_pred_df.format(precision=2))
-
-            if patient_id in alerts:
-                st.error("⚠️ **Critical Alerts Detected!**")
-                for alert in alerts[patient_id]:
-                    st.write(alert)
-
-            st.write("---")  
-
-        logging.info("Dashboard rendered successfully.")
-        # time.sleep(600)  
-        # st.experimental_rerun()
-
-
-if __name__ == "__main__":
-    monitor = PatientHealthMonitor()
-    monitor.run_dashboard()
-    # time.sleep(600)  
-    # st.rerun()
+try:
+    st.subheader("📘 Doctor-Friendly Explanation (Rules + Thresholds)")
+    st.markdown(explain_human_readable(latest_features_for_expl))
+except Exception as e:
+    logger.error(f"Explanation display failed: {e}")
+    st.error(f"❌ Could not display explanation: {e}")

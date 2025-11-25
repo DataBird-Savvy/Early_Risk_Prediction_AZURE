@@ -1,62 +1,81 @@
+# dataprocessing.py
 import pandas as pd
 import numpy as np
-import joblib
+import sys
 
 class DataPreprocessor:
-    """Class for preprocessing patient health data."""
 
-    def __init__(self, file_path, encoder_path, scaler_path):
-        self.file_path = file_path
-        self.encoder_path = encoder_path
-        self.scaler_path = scaler_path
-        self.df = None  
+    def clean_input(self, df):
+        """Cleanup + fix missing training columns."""
+        drop_extra = ["patient_id_x", "timestamp_x", "patient_id_y", "timestamp_y"]
+        df = df.drop(columns=[c for c in drop_extra if c in df.columns])
 
-    def load_data(self):
-        """Load CSV data into a DataFrame."""
-        self.df = pd.read_csv(self.file_path)
-        self.df=self.df.drop(['patient_id_x','patient_id_y','timestamp_x','timestamp_y'],axis=1)
-        return self.df
-
-    def process_timestamp(self):
-        """Convert Date & Time columns into a Timestamp and drop original columns."""
-        if 'Date' in self.df.columns and 'Time' in self.df.columns:
-            self.df['Timestamp'] = pd.to_datetime(
-                self.df['Date'] + ' ' + self.df['Time'], format='%d-%m-%Y %H.%M.%S',errors="coerce"
+        # Extract systolic/diastolic
+        if "Blood Pressure" in df.columns:
+            df["Systolic_BP"] = pd.to_numeric(
+                df["Blood Pressure"].astype(str).str.split("/").str[0], errors='coerce'
             )
-            self.df.drop(columns=['Date', 'Time'], inplace=True)
+            df["Diastolic_BP"] = pd.to_numeric(
+                df["Blood Pressure"].astype(str).str.split("/").str[1], errors='coerce'
+            )
 
-    def split_blood_pressure(self):
-        """Split Blood Pressure column into Systolic and Diastolic BP."""
-        if 'Blood Pressure' in self.df.columns:
-            self.df[['Systolic_BP', 'Diastolic_BP']] = self.df['Blood Pressure'].str.split('/', expand=True).astype(float)
-            self.df.drop(columns=['Blood Pressure'], inplace=True)
+        required_cols = [
+            'Patient_ID','Date','Time',
+            'Blood Glucose Level (mg/dL)','Blood Oxygen (SpO₂)',
+            'Heart Rate','Respiratory Rate (RR)','Body Temperature',
+            'Hemoglobin','Glucose','Cholesterol','Platelet Count',
+            'WBC Count','RBC Count','Creatinine','Urea','Sodium','Potassium',
+            'Calcium','Systolic_BP','Diastolic_BP'
+        ]
 
-    def encode_patient_id(self):
-        """Encode Patient_ID column."""
-        encoder = joblib.load(self.encoder_path)
-        self.df['Patient_ID'] = encoder.fit_transform(self.df['Patient_ID'])
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = np.nan
 
-    def scale_features(self):
-        """Apply feature scaling to numerical data (excluding Patient_ID)."""
-        scaler = joblib.load(self.scaler_path)
-        self.df = self.df.astype(np.float64)
-        self.df_scaled = self.df.copy()
-        self.df_scaled.iloc[:, 1:] = scaler.fit_transform(self.df_scaled.iloc[:, 1:])
+        # Ensure numeric columns are numeric
+        numeric_cols = [
+            'Systolic_BP', 'Diastolic_BP', 'Heart Rate', 'Blood Glucose Level (mg/dL)',
+            'Blood Oxygen (SpO₂)', 'Respiratory Rate (RR)', 'Body Temperature',
+            'Hemoglobin', 'Glucose', 'Cholesterol', 'Platelet Count', 'WBC Count',
+            'RBC Count', 'Creatinine', 'Urea', 'Sodium', 'Potassium', 'Calcium'
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    def preprocess(self):
-        """Perform all preprocessing steps and return the processed DataFrame."""
-        self.load_data()
-        self.process_timestamp()
-        self.split_blood_pressure()
-        self.encode_patient_id()
-        self.df.drop(columns=['Timestamp'], errors='ignore', inplace=True)
-        self.scale_features()
-        return self.df_scaled
+        return df[required_cols]
 
-if __name__=="__main__":
-    
-    merged_data_path="artifacts/merged_patient_kafka_data.csv"
-    
-    preprocessor = DataPreprocessor(merged_data_path, "artifacts/encoder.pkl", "artifacts/scaler.pkl")
-    df_scaled = preprocessor.preprocess()
-    
+    def feature_engineering(self, df):
+        df = df.copy()
+
+        systolic = "Systolic_BP"
+        diastolic = "Diastolic_BP"
+
+        df["PulsePressure"] = df[systolic] - df[diastolic]
+        df["MAP"] = (df[systolic] + 2 * df[diastolic]) / 3
+        df["ShockIndex"] = df["Heart Rate"] / df[systolic].replace(0, np.nan)
+
+        
+
+        # Flags
+        df["is_hypertensive"] = ((df[systolic] >= 130) | (df[diastolic] >= 80)).astype(int)
+        df["is_tachycardic"] = (df["Heart Rate"] >= 100).astype(int)
+        df["is_hypoxic"] = (df['Blood Oxygen (SpO₂)'] < 94).astype(int)
+        df["is_hyperglycemia"] = (df['Blood Glucose Level (mg/dL)'] >= 140).astype(int)
+
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        return df
+
+    def get_latest_records(self, df):
+        df["Time"] = df["Time"].astype(str)
+        df["DateTime"] = pd.to_datetime(df["Date"] + " " + df["Time"], errors="coerce")
+
+        # Get latest record for each patient
+        latest = df.sort_values("DateTime").groupby("Patient_ID").tail(1)
+
+        # ---- ROUND ALL NUMERIC COLUMNS TO 2 DECIMAL PLACES ----
+        num_cols = latest.select_dtypes(include=[float, int]).columns
+        latest[num_cols] = latest[num_cols].round(2)
+
+        return latest.drop(columns=["DateTime"], errors="ignore")
+

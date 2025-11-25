@@ -9,55 +9,96 @@
 # 🏥 Patient Health Monitoring System
 
 ## 📌 Overview
-This project integrates **wearable device readings (Blood Pressure, Blood Sugar, etc.)** and **lab records** to provide **real-time health monitoring**. It employs an **LSTM-based deep learning model** to predict patient vitals and generate **alerts for doctors** when abnormalities are detected.
+An end-to-end patient health monitoring system that:
+- Integrates real-time data from wearable devices and lab results
+- Uses an LSTM-based model for time-series prediction
+- Employs dataset drift detection (via Evidently AI)
+- Sends automatic alerts to doctors for abnormal vitals
+- Uses Kafka for real-time streaming integration
 
 ## 🔑 Key Features
-- ✅ **Wearable Data Integration** - Monitors **Blood Pressure, Blood Sugar, Heart Rate, Oxygen Saturation, etc.**
-- ✅ **Lab Record Merging** - Combines periodic lab results like **Hemoglobin, Cholesterol, WBC Count, etc.**
-- ✅ **LSTM-Based Prediction** - Forecasts the **next sequence** of patient vitals for early detection.
-- ✅ **Automated Alerts** - Flags abnormal readings & alerts doctors with **color-coded reports**.
-- ✅ **Interactive Dashboard** - Built using **Streamlit** for real-time monitoring.
+- ✅ Real-time ingestion from wearables: Blood Pressure, Blood Sugar, Heart Rate, SpO₂, ECG, etc.
+- ✅ Integration of Lab Records: Hemoglobin, Cholesterol, WBC, etc.
+- ✅ LSTM-Based Forecasting: Predicts future values of vitals (multi-variate sequence modeling)
+- ✅ Dataset Drift Detection: Uses Evidently AI to monitor data drift
+- ✅ Kafka + Zookeeper: Stream architecture using Docker Compose
+- ✅ Streamlit Dashboard: Interactive real-time visualization and alerting
+- ✅ Alert System: Color-coded alerts for doctors when thresholds are crossed
 
-## 🚀 Setup & Installation
-### 1️⃣ Clone the Repository
-```bash
-git clone https://github.com/your-username/PatientHealthMonitor.git
-cd PatientHealthMonitor
-```
-### 2️⃣ Create a Virtual Environment (Optional but Recommended)
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-### 3️⃣ Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-### 4️⃣ Setup Environment Variables
-Create a `.env` file in the root directory and add:
-```env
-MERGED_DATA_PATH=data/merged_data.csv
-ENCODER_PATH=models/encoder.pkl
-SCALER_PATH=models/scaler.pkl
-MODEL_PATH=models/lstm_model.h5
+---
+
+## 🧱 System Architecture
+- Data Sources → Kafka Topics
+- Kafka Stream → Preprocessing → LSTM Model → Predictions
+- Drift Monitoring (Evidently AI) → Alerting & Dashboarding
+
+---
+
+## ⚙️ Docker Setup (Kafka + Zookeeper)
+📁 docker-compose.yml:
+```yaml
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 ```
 
-### 5️⃣ Run the Streamlit Dashboard
+⏯ Run Kafka & Zookeeper:
 ```bash
-streamlit run app.py
+docker-compose up -d
 ```
 
-## 📊 LSTM Model Architecture
-The model predicts the next sequence of patient vitals using **Bidirectional LSTM layers** with **dropout regularization**:
+---
+
+## 🧪 Dataset Drift Detection with Evidently AI
+The system evaluates drift in incoming data using Evidently's DatasetDriftMetric.
+
+📄 drift_monitor.py:
+```python
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+import pandas as pd
+
+ref_data = pd.read_csv("data/reference_data.csv")
+curr_data = pd.read_csv("data/current_data.csv")
+
+report = Report(metrics=[DataDriftPreset()])
+report.run(reference_data=ref_data, current_data=curr_data)
+report.save_html("drift_report.html")
+```
+
+👁 View drift_report.html in browser to see changes in features over time.
+
+---
+
+## 🔍 LSTM Model Overview
+Architecture used for multi-variate vital forecasting:
+
 ```python
 model = Sequential([
-    Bidirectional(LSTM(128, activation='tanh', return_sequences=True, kernel_regularizer=l2(0.01)), input_shape=(30, X.shape[2])),
+    Bidirectional(LSTM(128, return_sequences=True, activation='tanh', kernel_regularizer=l2(0.01)), input_shape=(30, X.shape[2])),
     LayerNormalization(),
     Dropout(0.2),
-    Bidirectional(LSTM(64, activation='tanh', return_sequences=True)),
+    Bidirectional(LSTM(64, return_sequences=True)),
     BatchNormalization(),
     Dropout(0.2),
-    Bidirectional(LSTM(32, activation='tanh')),
+    Bidirectional(LSTM(32)),
     LayerNormalization(),
     Dropout(0.2),
     Dense(X.shape[2])
@@ -66,34 +107,59 @@ model = Sequential([
 model.compile(optimizer=AdamW(learning_rate=0.001), loss='mae')
 ```
 
-## 📢 Alerts & Critical Thresholds
-If a patient's predicted vitals exceed predefined thresholds, the system generates alerts:
-| Feature | Normal Range |
-|---------|-------------|
-| Blood Glucose | 70 - 140 mg/dL |
-| Oxygen (SpO₂) | 90 - 100% |
-| ECG | 0.5 - 1.5 |
-| Heart Rate | 50 - 110 bpm |
-| Respiratory Rate | 12 - 20 breaths/min |
-| Body Temperature | 36.1 - 37.8°C |
+---
 
-## 🛠️ Technologies Used
-- **Python** (Data Processing, Model Training)
-- **TensorFlow / Keras** (LSTM Model)
-- **Scikit-Learn** (Preprocessing & Feature Scaling)
-- **Streamlit** (Dashboard for Visualization)
-- **Pandas / NumPy** (Data Manipulation)
-- **Joblib** (Model Serialization)
 
-## 🤝 Contributing
-Feel free to contribute! Fork the repository and submit a **pull request**.
 
-## 📜 License
-This project is **MIT Licensed**. See `LICENSE` for details.
+## 🚨 Alert System: Critical Ranges
+If any forecasted vital crosses these ranges, alert is triggered.
+
+| Feature           | Normal Range            |
+|------------------|-------------------------|
+| Blood Glucose     | 70 - 140 mg/dL         |
+| Oxygen (SpO₂)     | 90 - 100%              |
+| ECG               | 0.5 - 1.5              |
+| Heart Rate        | 50 - 110 bpm           |
+| Respiratory Rate  | 12 - 20 breaths/min    |
+| Temperature       | 36.1 - 37.8°C          |
 
 ---
-✨ **Developed with ❤️ by jiya** ✨
 
+## 📊 Streamlit Dashboard
+📁 app.py includes real-time display:
+- Line plots of vitals
+- Red highlights for abnormal metrics
+- Drift report button
+
+📦 Run Dashboard:
+```bash
+streamlit run main.py
+```
+
+---
+
+
+
+---
+
+## 🛠️ Tech Stack
+- Python, Pandas, NumPy
+- TensorFlow/Keras (LSTM)
+- Scikit-Learn, Joblib
+- Evidently AI
+- Streamlit
+- Kafka + Zookeeper (via Docker)
+- Git for version control
+
+---
+
+## 🤝 Contributing
+Contributions welcome! Please fork this repo, create a new branch, and submit a PR.
+
+---
+
+## 📜 License
+MIT License – see LICENSE file.
 
 ---
 
