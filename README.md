@@ -2,7 +2,8 @@
 ---
 ## 📸 Screenshots
 ### 🟥 Real-Time Patient Monitoring Dashboard
-![heathmonitor](https://github.com/user-attachments/assets/49136bed-aa50-41fc-a8e9-78f391f0bed4)
+![alt text](image-1.png)
+
 
 
 
@@ -11,7 +12,7 @@
 ## 📌 Overview
 An end-to-end patient health monitoring system that:
 - Integrates real-time data from wearable devices and lab results
-- Uses an LSTM-based model for time-series prediction
+- Uses XGBoost model for risk prediction
 - Employs dataset drift detection (via Evidently AI)
 - Sends automatic alerts to doctors for abnormal vitals
 - Uses Kafka for real-time streaming integration
@@ -19,17 +20,17 @@ An end-to-end patient health monitoring system that:
 ## 🔑 Key Features
 - ✅ Real-time ingestion from wearables: Blood Pressure, Blood Sugar, Heart Rate, SpO₂, ECG, etc.
 - ✅ Integration of Lab Records: Hemoglobin, Cholesterol, WBC, etc.
-- ✅ LSTM-Based Forecasting: Predicts future values of vitals (multi-variate sequence modeling)
 - ✅ Dataset Drift Detection: Uses Evidently AI to monitor data drift
 - ✅ Kafka + Zookeeper: Stream architecture using Docker Compose
 - ✅ Streamlit Dashboard: Interactive real-time visualization and alerting
-- ✅ Alert System: Color-coded alerts for doctors when thresholds are crossed
+- ✅ Alert System: Color-coded alerts for doctors when thresholds are 
+- ✅ Collapsible expanders for patient-specific **feature importance*
 
 ---
 
 ## 🧱 System Architecture
 - Data Sources → Kafka Topics
-- Kafka Stream → Preprocessing → LSTM Model → Predictions
+- Kafka Stream → Preprocessing → Model → Predictions
 - Drift Monitoring (Evidently AI) → Alerting & Dashboarding
 
 ---
@@ -87,25 +88,9 @@ report.save_html("drift_report.html")
 
 ---
 
-## 🔍 LSTM Model Overview
+## 🔍 Model Overview
 Architecture used for multi-variate vital forecasting:
 
-```python
-model = Sequential([
-    Bidirectional(LSTM(128, return_sequences=True, activation='tanh', kernel_regularizer=l2(0.01)), input_shape=(30, X.shape[2])),
-    LayerNormalization(),
-    Dropout(0.2),
-    Bidirectional(LSTM(64, return_sequences=True)),
-    BatchNormalization(),
-    Dropout(0.2),
-    Bidirectional(LSTM(32)),
-    LayerNormalization(),
-    Dropout(0.2),
-    Dense(X.shape[2])
-])
-
-model.compile(optimizer=AdamW(learning_rate=0.001), loss='mae')
-```
 
 ---
 
@@ -126,10 +111,9 @@ If any forecasted vital crosses these ranges, alert is triggered.
 ---
 
 ## 📊 Streamlit Dashboard
-📁 app.py includes real-time display:
-- Line plots of vitals
+📁 main.py includes real-time display:
 - Red highlights for abnormal metrics
-- Drift report button
+
 
 📦 Run Dashboard:
 ```bash
@@ -144,7 +128,7 @@ streamlit run main.py
 
 ## 🛠️ Tech Stack
 - Python, Pandas, NumPy
-- TensorFlow/Keras (LSTM)
+- XGboost
 - Scikit-Learn, Joblib
 - Evidently AI
 - Streamlit
