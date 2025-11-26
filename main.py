@@ -1,13 +1,16 @@
 import streamlit as st
 import pandas as pd
 import joblib
-import shap
 import numpy as np
 import warnings
 import logging
-
+import sys
 from src.data_preprocessing import DataPreprocessor
-from src.config import MERGED_DATA_PATH, BEST_PIPELINE, TRAIN_COL_ORDER
+from src.config import MERGED_DATA_PATH, BEST_PIPELINE, TRAIN_COL_ORDER,RISK_COLOR_MAP
+from style import explainability_css
+
+# Apply the CSS
+st.markdown(explainability_css(), unsafe_allow_html=True)
 
 warnings.filterwarnings("ignore")
 
@@ -71,6 +74,11 @@ def load_live_data():
         logger.error(f"Error loading live data: {e}")
         st.error(f"❌ Could not load live data: {e}")
         return None
+def color_risk(val):
+    color = RISK_COLOR_MAP.get(val, "lightgray")
+    text_color = "black"  # for light backgrounds
+    return f'background-color: {color}; color: {text_color}; font-weight: bold; text-align: center;'
+
 
 def convert_strlist_columns(df):
     try:
@@ -131,68 +139,99 @@ try:
     logger.info("Predictions completed")
 
     st.subheader("📌 Latest Patient Risk Prediction")
-    st.dataframe(latest[["Patient_ID", "Predicted_Risk"]])
+    st.dataframe(
+    latest[["Patient_ID", "Predicted_Risk"]]
+    .style.applymap(color_risk, subset=["Predicted_Risk"])
+)
 except Exception as e:
     logger.error(f"Prediction failed: {e}")
     st.error(f"❌ Prediction failed: {e}")
     st.stop()
 
 # --------------------------------------------------
-# SHAP Explainability
+# Doctor-Friendly Explainability using Method 1
 # --------------------------------------------------
-try:
-    st.subheader("🧠 Explainability — Why this risk?")
+def get_global_feature_importance(pipeline, feature_names):
+    """
+    Extract top-K feature importances from pipeline (RandomForest/XGBoost + SelectKBest)
+    """
     selector = pipeline.named_steps["select"]
     model = pipeline.named_steps["model"]
 
-    patient_row = latest_features_for_expl.iloc[[0]].copy()
-    patient_array = patient_row.to_numpy().astype(float)
-    patient_array = np.round(patient_array, 2)
+    # Mask of selected top-K features
+    mask = selector.get_support()
+    selected_features = np.array(feature_names)[mask]
 
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(patient_array)
+    # Feature importance
+    if hasattr(model, "feature_importances_"):
+        importance = model.feature_importances_
+    elif hasattr(model, "coef_"):
+        importance = np.abs(model.coef_[0])
+    else:
+        raise ValueError("Model does not support basic feature importance.")
 
-    pred_class = pred[0]
-    shap_for_class = shap_values[pred_class] if isinstance(shap_values, list) else shap_values
+    df_imp = (
+        pd.DataFrame({
+            "feature": selected_features,
+            "importance": importance
+        })
+        .sort_values("importance", ascending=False)
+        .reset_index(drop=True)
+    )
+    return df_imp
 
-    shap_df = pd.DataFrame({
-        "Feature": train_feature_order,
-        "SHAP_Value": shap_for_class[0]
-    }).sort_values(by="SHAP_Value", key=abs, ascending=False)
+def doctor_friendly_importance_styled(importance_df, n_top=5, patient_row=None):
+    """
+    Convert feature importance to a visually appealing markdown summary.
+    """
+    top_features = importance_df.head(n_top)
+    lines = ["<h5>🔹 Top factors contributing to patient's risk:</h5><ul>"]
 
-    st.dataframe(shap_df)
-except Exception as e:
-    logger.error(f"Explainability failure: {e}")
-    st.error(f"Explainability failed: {e}")
+    for _, row in top_features.iterrows():
+        feature_name = row['feature']
+        importance = row['importance']
+        if patient_row is not None and feature_name in patient_row.columns:
+            value = patient_row[feature_name].iloc[0]
+            lines.append(
+                f"<li><b>{feature_name}</b>: "
+                f"<span style='color:blue'>{value}</span> "
+                f"(importance: {importance:.2f})</li>"
+            )
+        else:
+            lines.append(
+                f"<li><b>{feature_name}</b> (importance: {importance:.2f})</li>"
+            )
+
+    lines.append("</ul>")
+    return "".join(lines)
+
+
+
 
 # --------------------------------------------------
-# Human-readable explanation
+# Display Doctor-Friendly Global Feature Importance
 # --------------------------------------------------
-def explain_human_readable(df):
-    try:
-        text="Based on the latest vital signs and lab results, the following risk factors were identified:\n\n"
-        spo2 = df["Blood Oxygen (SpO₂)"].iloc[0]
-        shock = df["ShockIndex"].iloc[0]
-        glu = df["Blood Glucose Level (mg/dL)"].iloc[0]
-        hr = df["Heart Rate"].iloc[0]
-
-        if spo2 < 94:
-            text += "- Low oxygen saturation (SpO₂ < 94%) – major risk\n"
-        if shock > 0.9:
-            text += "- High Shock Index (>0.9) – major risk\n"
-        if glu >= 140:
-            text += "- High blood glucose (>140 mg/dL)\n"
-        if hr >= 100:
-            text += "- Elevated heart rate (>100 bpm)\n"
-
-        return text
-    except Exception as e:
-        logger.error(f"Human-readable explanation failed: {e}")
-        return "❌ Could not generate human-readable explanation."
-
 try:
-    st.subheader("📘 Doctor-Friendly Explanation (Rules + Thresholds)")
-    st.markdown(explain_human_readable(latest_features_for_expl))
+    st.subheader("🧠 Explainability — Top Risk Factors Per Patient")
+    
+  
+
+    importance_df = get_global_feature_importance(pipeline, train_feature_order)
+
+    for i in range(len(latest_features_for_expl)):
+        patient_row = latest_features_for_expl.iloc[[i]]
+        patient_id = latest.iloc[i]["Patient_ID"]
+        
+        summary_html = doctor_friendly_importance_styled(importance_df, n_top=5, patient_row=patient_row)
+   
+        
+        # Collapsible expander for each patient
+        with st.expander(f"Patient ID: {patient_id} — Predicted Risk: {latest.iloc[i]['Predicted_Risk']}"):
+            st.markdown(summary_html, unsafe_allow_html=True)
+        
+
+
+    logger.info("Doctor-friendly feature importance displayed for all patients")
 except Exception as e:
-    logger.error(f"Explanation display failed: {e}")
-    st.error(f"❌ Could not display explanation: {e}")
+    logger.error(f"Doctor-friendly explainability failed: {e}")
+    st.error(f"❌ Could not generate explainability for all patients: {e}")

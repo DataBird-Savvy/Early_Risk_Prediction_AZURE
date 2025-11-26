@@ -8,9 +8,15 @@ drop_cols = [
     'Heart Rate (HR)'
 
 ]
-MODEL_PATH="artifacts/best_model.joblib"
-ENCODER_PATH="artifacts/label_encoder.joblib"
-TRAIN_ALL_COLS_PATH="artifacts/train_all_cols.joblib"
+
+
 BEST_PIPELINE="artifacts/best_pipeline.joblib"
-TRAIN_NUMERIC_COLS='artifacts/train_numeric_cols.joblib'
+
 TRAIN_COL_ORDER='artifacts/train_feature_order.joblib'
+
+RISK_COLOR_MAP = {
+    "Low": "#d4f7d4",       # very light green
+    "Medium": "#ffe5b4",    # very light orange / beige
+    "High": "#f7c8c8",      # very light red / pink
+    "Critical": "#800000"   # dark red
+}
